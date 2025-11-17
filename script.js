@@ -950,4 +950,137 @@ updateDeviceCount();
       setTimeout(() => { el.simToast.textContent = ''; }, 2000);
     }
   });
-})();
+
+  // === Live action log styling + periodic updates (every 10s) ===
+  // Make the action log use Courier New and darker text, and simulate live device churn.
+  if (el.actionLog) {
+    el.actionLog.style.fontFamily = "'Courier New', monospace";
+    el.actionLog.style.color = '#000'; // darker black
+    el.actionLog.style.whiteSpace = 'pre-wrap';
+  }
+
+  const stopEngineBtn = document.getElementById('stopEngine');
+
+  function rndId() {
+    return `dev${Math.floor(Math.random() * 9000 + 1000)}`;
+  }
+
+  // Manage live update interval so it can be stopped/restarted
+  let liveInterval = null;
+  function startLiveUpdates() {
+    if (liveInterval) return;
+    liveInterval = setInterval(liveUpdate, 10000);
+    log('Live log updates enabled (interval: 10s)');
+  }
+  function stopLiveUpdates() {
+    if (!liveInterval) return;
+    clearInterval(liveInterval);
+    liveInterval = null;
+    log('Live updates stopped');
+    if (el.simToast) {
+      el.simToast.textContent = 'Live engine stopped';
+      setTimeout(() => { el.simToast.textContent = ''; }, 1600);
+    }
+  }
+  
+  stopEngineBtn?.addEventListener('click', () => {
+    stopLiveUpdates();
+  });
+
+  function liveUpdate() {
+    // Occasionally add a new device (30%) if under a soft cap
+    if (Math.random() < 0.30 && devices.length < 12) {
+      const id = rndId();
+      const chosenAP = aps[Math.floor(Math.random() * aps.length)].id;
+      const newDev = {
+        user: `guest${id}@net`,
+        ap: chosenAP,
+        supports5g: Math.random() < 0.6,
+        jitter: Math.floor(Math.random() * 60) + 1,
+        pattern: ['stable', 'burst', 'large_download'][Math.floor(Math.random() * 3)],
+        packetVar: Math.floor(Math.random() * 60),
+        priorityUser: Math.random() < 0.06,
+        priority: 'normal'
+      };
+      devices.push(newDev);
+      log(`Device joined: ${newDev.user} → ${newDev.ap}`);
+    }
+
+    // Occasionally remove a random non-priority device (20%)
+    if (Math.random() < 0.20 && devices.length > 3) {
+      // prefer removing non-priority users
+      const candidates = devices.map((d, i) => ({ d, i })).filter(x => !x.d.priorityUser);
+      if (candidates.length) {
+        const pick = candidates[Math.floor(Math.random() * candidates.length)];
+        const removed = devices.splice(pick.i, 1)[0];
+        log(`Device left: ${removed.user} (disconnect)`);
+      }
+    }
+
+    // Randomly mutate existing devices to look active
+    devices.forEach(d => {
+      // capture previous values to log meaningful changes
+      const prevJ = d.jitter;
+      const prevP = d.pattern;
+      if (Math.random() < 0.45) {
+        d.jitter = Math.max(1, d.jitter + Math.floor((Math.random() - 0.5) * 12));
+      }
+      if (Math.random() < 0.18) {
+        d.pattern = Math.random() < 0.6 ? 'stable' : (Math.random() < 0.5 ? 'burst' : 'large_download');
+      }
+      // log notable changes
+      const jDelta = Math.abs(d.jitter - prevJ);
+      if (jDelta >= 8) log(`Metric: ${d.user} jitter ${prevJ} -> ${d.jitter} ms`);
+      if (prevP !== d.pattern) log(`Metric: ${d.user} pattern ${prevP} -> ${d.pattern}`);
+      // occasionally move device between APs to simulate roaming
+      if (Math.random() < 0.07) {
+        const candidateAP = aps[Math.floor(Math.random() * aps.length)].id;
+        if (candidateAP !== d.ap) {
+          log(`Roam: ${d.user} ${d.ap} -> ${candidateAP}`);
+          d.ap = candidateAP;
+        }
+      }
+    });
+
+    // Recalculate AP loads from device counts + noise to feel realistic
+    aps.forEach(ap => {
+      const count = devices.filter(d => d.ap === ap.id).length;
+      const baseLoad = Math.min(90, Math.round(count * 9 + (Math.random() * 8 - 4)));
+      // keep congested flags accurate
+      ap.load = Math.max(5, Math.min(99, baseLoad));
+    });
+
+    renderAPs();
+    renderDevices();
+
+    // Summary log entry of AP loads
+    const summary = aps.map(a => `${a.id}:${a.load}%`).join(' | ');
+    log(`Periodic status — AP loads: ${summary}`);
+
+    // Trim log to keep UI responsive (keep latest ~80 entries)
+    if (el.actionLog) {
+      const children = el.actionLog.children;
+      while (children.length > 80) {
+        // since we insert entries at the top (afterbegin), remove last child (oldest)
+        el.actionLog.removeChild(el.actionLog.lastChild);
+      }
+    }
+  }
+
+  // start periodic live updates (every 10 seconds)
+  startLiveUpdates();
+
+   document.addEventListener('visibilitychange', () => {
+     // pause updates when tab not visible to reduce CPU
+    if (document.hidden) {
+      stopLiveUpdates();
+    } else {
+      startLiveUpdates();
+      log('Live updates resumed');
+    }
+   });
+
+   // initial small burst so page feels "live" on load
+   setTimeout(liveUpdate, 1200);
+
+ })();
